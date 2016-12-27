@@ -19,6 +19,6 @@ fi
 
 # starting kodi net2serial fucker
 echo "starting /usr/local/bin/kodi-notifications-to-serial.py"
-nohup /usr/local/bin/kodi-notifications-to-serial.py > /var/log/kodi-notify.log &
+nohup /usr/local/bin/kodi-notifications-to-serial.py 2>%1 | logger &
 
 exit 0

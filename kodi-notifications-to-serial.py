@@ -15,6 +15,9 @@
 import serial
 import socket
 import time
+import json
+import syslog
+import time
 
 # kodi Verbindungsparameter
 kodihost = "192.168.178.62"
@@ -25,35 +28,38 @@ cmd_up = "07a1a"
 cmd_down = "07a1b"
 cmd_ready = "\x11000\x03"
 cmd_reset = "\x13\x7f\x7f\x7f\x03"
-thx = "\x02207e82\x03" + "\x0207ec2"
+thx = "\x0207e82\x03" + "\x0207ec2"
 stereo = "07ec0"
 pure_on = "07e80"
 pure_off = "07e82"
 amp_on  =  "07a1d"
 amp_off =  "07a1e"
 cmd_zone1on =  "07e7e"
+initamp_on  =  cmd_ready + "\x03\x02" + cmd_zone1on
 
-lastmode="ficker"
 
-# befehle in dieser liste werden ignoriert, wenn sie mehrfach hintereinander kommen
-modelist = ['music']
+# befehle in d]ieser liste werden ignoriert, wenn sie mehrfach hintereinander kommen
+medialist = ['music','movie','episode','liveTV', 'channel', 'stream','musicvideo']
+senderlist = ['FUCK','kodi.callbacks']
+methodlist = ['Other.LAUTER','Other.LEISER','Other.onScreensaverDeactivated','other.ampon','Other.ampoff']
 
 # {"jsonrpc":"2.0","method":"Other.LAUTER","params":{"data":null,"sender":"FUCK"}}
 kommandoliste  = {
-        "LAUTER": cmd_up,
-        "LEISER": cmd_down,
-	"movie": thx,
-	"episode": thx,
-	"liveTV": thx,
-	"channel": thx,
-	"stream": thx,
-	"musicvideo": stereo,
-	"music": pure_on,
-	"ampon": amp_on,
-	"ampoff": amp_off,
-        "cmdready": cmd_ready,
-        "cmdreset": cmd_reset,
-        "cmdzone1on" : cmd_zone1on,
+        'Other.LAUTER': cmd_up,
+        'Other.LEISER': cmd_down,
+	'movie': thx,
+	'episode': thx,
+	'liveTV': thx,
+	'channel': thx,
+	'stream': thx,
+	'musicvideo': stereo,
+	'music': pure_on,
+        'Other.ampoff': amp_off,
+        'Other.onScreensaverDeactivated': initamp_on,
+        'other.ampon': initamp_on,
+        'cmdready': cmd_ready,
+        'cmdreset': cmd_reset,
+        'cmdzone1on' : cmd_zone1on,
         }
 
 
@@ -61,55 +67,101 @@ kommandoliste  = {
 ###
 ###
 
-# Der RX-V1600 nimmt folgende Einstellungen an:
-# 9600,8,N,1
-# Serielle Verbindung öffnen
-# variable: dose
-serielleverbindung = serial.Serial(
-        port='/dev/ttyAMA0',
-        baudrate=9600,
-)
+def LOG(text):
+    syslog.syslog(text)
 
-def receiversend(cmd="",prefix="\x02", suffix="\x03"):
-    if not('\x11' in cmd or '\x12' in cmd or '\x13' in cmd or '\x03' in cmd or '\x02' in cmd): 
-        serielleverbindung.write(prefix)
-    serielleverbindung.write(cmd)
-    serielleverbindung.write(suffix)
+def mainloop():
+    lastmedia="ficker"
 
-
-
-# initialisiere receiver:
-#(war in versuchen nicht notwendig)
-#serielleverbindung.write(kommandoliste['cmdready'])
-receiversend(kommandoliste['cmdready'])
-
-# baue tcp verbindung zu kodi auf um notifications zu empfangen
-# variable: socke
-kodiverbindung = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-kodiverbindung.connect((kodihost,kodiport))
-
-
-# beim scriptstart den verstärker pauschal anschalten
-# 07e7e
-#serielleverbindung.write(kommandoliste['ampon'])
-#serielleverbindung.write(kommandoliste['cmdzone1on'])
-
-receiversend(kommandoliste['cmdzone1on'])
-time.sleep(1)
-
-# endlosschleife, empfange von socke, schreibe nach dose
-while 1:
-    empfangenedaten = kodiverbindung.recv(1024)
-    #print "empfangen: " + empfangenedaten
-
-    for kommandoname in kommandoliste:
-        if kommandoname in empfangenedaten:
-            print "TREFFER:" + kommandoname
-            if kommandoname == lastmode and kommandoname in modelist:
-                print "same as before, ignoring"
+    # Der RX-V1600 nimmt folgende Einstellungen an:
+    # 9600,8,N,1
+    # Serielle Verbindung öffnen
+    # variable: dose
+    serielleverbindung = serial.Serial(
+            port='/dev/ttyAMA0',
+            baudrate=9600,
+    )
+    LOG("Serielle Verbinung hergestellt")
+    
+    def receiversend(cmd="",prefix="\x02", suffix="\x03"):
+       if not('\x11' in cmd or '\x12' in cmd or '\x13' in cmd or '\x03' in cmd or '\x02' in cmd): 
+           serielleverbindung.write(prefix)
+       serielleverbindung.write(cmd)
+       serielleverbindung.write(suffix)
+   
+     # initialisiere receiver:
+    receiversend(kommandoliste['cmdready'])
+     # beim scriptstart den verstärker pauschal anschalten
+    receiversend(kommandoliste['cmdzone1on'])
+    LOG("Verstärker initialisiert")
+   
+    # baue tcp verbindung zu kodi auf um notifications zu empfangen
+    try:
+        kodiverbindung = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        kodiverbindung.connect((kodihost,kodiport))
+    except:
+        LOG("Verbindungsfehler!")
+        return
+    
+    LOG("Verbindung zu Kodi hergestellt, warte auf Eingaben")
+    
+    # endlosschleife, empfange von socke, schreibe nach dose
+    while 1:
+        empfangenedaten = kodiverbindung.recv(1024)
+    
+        if not empfangenedaten:
+            LOG("connection lost?")
+            break
+    
+    
+        LOG("empfangen: " + empfangenedaten)
+    
+        # wandle JSON String in Dict um
+        daten = json.loads(empfangenedaten)
+    
+        if not daten:
+            LOG("daten fehlerhaft")
+            continue
+    
+        sendername = daten.get('params',{}).get('sender','UNKNOWN')
+        methodname = daten.get('method',"UNKOWN METHOD")
+        
+        mediatype = "NONE"
+        kommandoname = ""
+    
+        if daten.get('params',{}).get('data',False):
+            mediatype = daten.get('params',{}).get('data',{}).get("mediaType",'UNKNOWN')
+    
+        # wenn es kein "sender" ist, den wir über senderlist abonniert haben, überspringe.
+        if sendername not in senderlist:
+            LOG("sender " + sendername + " wird ignoriert")
+            continue
+    
+        if mediatype in medialist:
+            LOG("MEDIUM:" + mediatype)
+            if mediatype == lastmedia and mediatype in medialist:
+                LOG("same as before, ignoring")
             else:
-                receiversend(kommandoliste[kommandoname])
+                kommandoname = mediatype
+    
+            lastmedia=mediatype
+    
+        elif methodname in methodlist:
+            LOG("METHOD: " + methodname)
+            kommandoname = methodname
+    
+        if kommandoname:
+            receiversend(kommandoliste[kommandoname])
+        else:
+            LOG("kein Ereignis gefunden.")
+    
 
-            lastmode=kommandoname
+#
+# MAIN
+#
 
-
+while 1:
+    LOG("Kodi JSON to Serial gestartet")
+    mainloop()
+    LOG("Hauptschleife wurde beendet, Neustart in 10 Sekunden...")
+    time.sleep(10)
