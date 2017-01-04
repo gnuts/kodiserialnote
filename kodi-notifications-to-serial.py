@@ -117,7 +117,11 @@ def mainloop():
         LOG("empfangen: " + empfangenedaten)
     
         # wandle JSON String in Dict um
-        daten = json.loads(empfangenedaten)
+        try:
+            daten = json.loads(empfangenedaten)
+        except:
+            LOG("fehlerhafte daten. wird ignoriert.")
+            continue
     
         if not daten:
             LOG("daten fehlerhaft")
